@@ -28,6 +28,7 @@ enum Framework: String {
     case webpack = "Webpack"
     case django = "Django"
     case flask = "Flask"
+    case fastapi = "FastAPI"
     case rails = "Rails"
     case cargo = "Cargo"
     case go = "Go"
@@ -44,6 +45,7 @@ enum Framework: String {
         case .webpack: Color(hex: 0x8DD6F9)
         case .django:  Color(hex: 0x0C6B3E)
         case .flask:   .secondary
+        case .fastapi: Color(hex: 0x009688)
         case .rails:   Color(hex: 0xCC0000)
         case .cargo:   Color(hex: 0xCE422B)
         case .go:      Color(hex: 0x00ADD8)

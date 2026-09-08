@@ -22,7 +22,7 @@ A little robot that lives in your menu bar and keeps an eye on your running dev 
 - **Live server monitoring** — every dev server running on your machine, with port, framework and project name
 - **Restart without leaving the menu bar** — stop and relaunch a dev server in one click, no terminal, no rebuild
 - **Failures explained in place** — when a restart doesn't come back, the row shows why, with the full output one click from your clipboard
-- **Framework detection** — Next.js, Vite, Nuxt, Remix, Astro, Django, Flask, Rails and more, each with its own colour
+- **Framework detection** — Next.js, Vite, Nuxt, Remix, Astro, Django, Flask, FastAPI, Rails and more, each with its own colour
 - **Simulator tracking** — booted simulators with device name, runtime, and the app running inside
 - **Relaunch an app in the simulator** — terminate and launch without going back to Xcode
 - **One-click stop** — a single server, or everything in a section
@@ -47,7 +47,7 @@ Blink polls every few seconds using standard macOS tools:
 
 - **Port scanning** — `lsof` to find listening TCP ports
 - **Framework detection** — inspects process arguments and working directory
-- **Project names** — reads `package.json`, `Cargo.toml`, or falls back to the directory name
+- **Project names** — reads `package.json`, `Cargo.toml`, `pyproject.toml` (`[project]` or `[tool.poetry]`), or falls back to the directory name
 - **Simulators** — `xcrun simctl` for booted simulator data
 
 Restarting is less obvious than it sounds. The process holding a port often can't be

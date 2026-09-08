@@ -156,6 +156,8 @@ enum ProcessResolver {
         if args.contains("webpack") { return .webpack }
         if args.contains("manage.py") || args.contains("django") { return .django }
         if args.contains("flask") { return .flask }
+        if args.contains("uvicorn") || args.contains("fastapi") || args.contains("hypercorn")
+            || (args.contains("gunicorn") && args.contains("uvicorn.workers")) { return .fastapi }
         if args.contains("rails") || args.contains("puma") || args.contains("unicorn") { return .rails }
         if args.contains("cargo") { return .cargo }
         if args.contains("go run") || args.contains("go build") { return .go }
@@ -178,12 +180,17 @@ enum ProcessResolver {
 
         let cargoToml = (directory as NSString).appendingPathComponent("Cargo.toml")
         if let content = try? String(contentsOfFile: cargoToml, encoding: .utf8),
-           let range = content.range(of: #"name\s*=\s*"([^"]+)""#, options: .regularExpression) {
-            let match = content[range]
-            if let quoteStart = match.firstIndex(of: "\""),
-               let quoteEnd = match[match.index(after: quoteStart)...].firstIndex(of: "\"") {
-                return formatName(String(match[match.index(after: quoteStart)..<quoteEnd]))
-            }
+           let name = quotedValue(forKey: "name", in: content) {
+            return formatName(name)
+        }
+
+        // Only [project] and [tool.poetry] carry the package name; dependency
+        // tables can contain `name =` too, so scope the lookup to those tables.
+        let pyprojectToml = (directory as NSString).appendingPathComponent("pyproject.toml")
+        if let content = try? String(contentsOfFile: pyprojectToml, encoding: .utf8),
+           let name = tomlTable("project", in: content).flatMap({ quotedValue(forKey: "name", in: $0) })
+               ?? tomlTable("tool.poetry", in: content).flatMap({ quotedValue(forKey: "name", in: $0) }) {
+            return formatName(name)
         }
 
         let name = (directory as NSString).lastPathComponent
@@ -194,6 +201,38 @@ enum ProcessResolver {
         name.split(separator: "-")
             .map { $0.prefix(1).uppercased() + $0.dropFirst() }
             .joined(separator: " ")
+    }
+
+    // MARK: - TOML
+
+    /// The value of the first `key = "..."` line in `content`.
+    private static func quotedValue(forKey key: String, in content: String) -> String? {
+        let pattern = #"(?m)^\s*"# + NSRegularExpression.escapedPattern(for: key) + #"\s*=\s*"[^"]+""#
+        guard let range = content.range(of: pattern, options: .regularExpression) else { return nil }
+
+        let match = content[range]
+        guard let quoteStart = match.firstIndex(of: "\""),
+              let quoteEnd = match[match.index(after: quoteStart)...].firstIndex(of: "\"") else { return nil }
+
+        return String(match[match.index(after: quoteStart)..<quoteEnd])
+    }
+
+    /// The body of the `[table]` section in `content`, up to the next table header.
+    private static func tomlTable(_ table: String, in content: String) -> String? {
+        var body: [Substring] = []
+        var inside = false
+
+        for line in content.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("[") {
+                if inside { break }
+                inside = trimmed == "[\(table)]"
+            } else if inside {
+                body.append(line)
+            }
+        }
+
+        return inside ? body.joined(separator: "\n") : nil
     }
 }
 
