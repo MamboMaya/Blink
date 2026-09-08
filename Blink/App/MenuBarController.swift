@@ -1,5 +1,6 @@
 import SwiftUI
 
+@MainActor
 final class MenuBarController: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: NSPanel!
@@ -120,9 +121,11 @@ final class MenuBarController: NSObject, NSApplicationDelegate {
             context.duration = 0.12
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            guard let self, self.panel.alphaValue == 0 else { return }
-            self.panel.orderOut(nil)
-            self.panel.alphaValue = 1
+            Task { @MainActor in
+                guard let self, self.panel.alphaValue == 0 else { return }
+                self.panel.orderOut(nil)
+                self.panel.alphaValue = 1
+            }
         })
 
         if let monitor = eventMonitor {

@@ -6,6 +6,7 @@ struct MenuBarView: View {
     @Environment(AppState.self) private var appState
 
     @State private var page: Page = .main
+    @State private var isColimaVMHovered = false
 
     enum Page {
         case main, settings, about
@@ -76,7 +77,7 @@ private extension MenuBarView {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .transition(.opacity)
-        } else if appState.servers.isEmpty && appState.simulators.isEmpty {
+        } else if appState.servers.isEmpty && appState.simulators.isEmpty && appState.colima == nil {
             EmptyStateView()
                 .transition(.opacity.combined(with: .scale(scale: 0.97)))
         } else {
@@ -87,6 +88,9 @@ private extension MenuBarView {
                     }
                     if !appState.simulators.isEmpty {
                         simulatorSection
+                    }
+                    if appState.colima != nil {
+                        containersSection
                     }
                 }
                 .padding(12)
@@ -144,6 +148,99 @@ private extension MenuBarView {
                     ))
             }
         }
+    }
+
+    var containersSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("CONTAINERS", icon: "shippingbox", action: nil) {}
+
+            colimaVMRow
+
+            if let colima = appState.colima {
+                ForEach(colima.containers) { container in
+                    ContainerRowView(container: container)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .move(edge: .trailing).combined(with: .opacity)
+                        ))
+                }
+            }
+        }
+    }
+
+    var colimaVMRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            colimaVMHeader
+
+            if let colimaVMFailure = appState.colimaVMFailure {
+                FailureBox(message: colimaVMFailure)
+                    .padding(.leading, HoverRowStyle.horizontalPadding + ColorBar.gutter)
+                    .padding(.trailing, HoverRowStyle.horizontalPadding)
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: appState.colimaVMFailure)
+    }
+
+    var colimaVMHeader: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Colima")
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+
+                Text(colimaStatusText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.leading, ColorBar.gutter)
+
+            Spacer()
+
+            if appState.colimaVMBusy {
+                ProgressView()
+                    .controlSize(.small)
+                    .transition(.opacity)
+            } else if isColimaVMHovered {
+                RowAction(
+                    symbol: appState.colimaVMFailure != nil
+                        ? "xmark"
+                        : (appState.colima?.vm.isRunning == true ? "stop.fill" : "play.fill"),
+                    help: appState.colimaVMFailure != nil
+                        ? "Dismiss"
+                        : (appState.colima?.vm.isRunning == true ? "Stop Colima" : "Start Colima"),
+                    tint: appState.colimaVMFailure != nil || appState.colima?.vm.isRunning == true ? .alert : nil
+                ) {
+                    if appState.colimaVMFailure != nil {
+                        appState.dismissColimaVMFailure()
+                    } else if appState.colima?.vm.isRunning == true {
+                        appState.stopColimaVM()
+                    } else {
+                        appState.startColimaVM()
+                    }
+                }
+                .transition(.opacity)
+            }
+        }
+        .opacity(appState.colimaVMBusy ? 0.6 : 1)
+        .animation(.easeOut(duration: 0.2), value: appState.colimaVMBusy)
+        .hoverRow { isColimaVMHovered = $0 }
+    }
+
+    var colimaStatusText: String {
+        guard let vm = appState.colima?.vm, vm.isRunning else { return "Stopped" }
+
+        var parts: [String] = []
+        if let cpus = vm.cpus { parts.append("\(cpus) CPU") }
+
+        if let totalGB = vm.memoryGB {
+            let usedBytes = appState.colima?.containers.reduce(Int64(0)) { $0 + ($1.memoryBytes ?? 0) } ?? 0
+            let usedGB = Double(usedBytes) / 1_073_741_824
+            parts.append(String(format: "%.1f / %d GB", usedGB, totalGB))
+        }
+
+        return parts.joined(separator: " · ")
     }
 
     func sectionHeader(

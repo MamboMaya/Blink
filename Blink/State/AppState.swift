@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 
+@MainActor
 @Observable
 final class AppState {
     var servers: [DevServer] = []
@@ -13,20 +14,29 @@ final class AppState {
 
     var simulatorRestartStates: [String: RestartState] = [:]
 
+    var colima: ColimaMonitor.ColimaState?
+    var containerRestartStates: [String: RestartState] = [:]
+    var colimaVMBusy: Bool = false
+    var colimaVMFailure: String?
+
     private static let pollingInterval: TimeInterval = 3.0
 
-    private var timer: Timer?
+    // Only ever touched on the main actor except at teardown, where deinit
+    // (always nonisolated) needs to invalidate it synchronously.
+    @ObservationIgnored
+    private nonisolated(unsafe) var timer: Timer?
     private var killedPIDs: Set<Int> = []
 
     // Keyed by the killed PID, not the port: a port that never falls silent
     // would otherwise stay suppressed forever.
     private var killedPorts: [Int: Int] = [:]
     private var killedSimUDIDs: Set<String> = []
+    private var killedContainerIDs: Set<String> = []
 
     private var relaunched: [Int: RelaunchedServer] = [:]
 
     private(set) var isActive: Bool = false
-    var totalCount: Int { servers.count + simulators.count }
+    var totalCount: Int { servers.count + simulators.count + (colima?.containers.count ?? 0) }
 
     // MARK: - Blink Events
 
@@ -64,7 +74,7 @@ final class AppState {
 
         timer = Timer.scheduledTimer(withTimeInterval: Self.pollingInterval, repeats: true) { [weak self] _ in
             guard let self else { return }
-            Task { await self.refresh() }
+            Task { @MainActor in await self.refresh() }
         }
     }
 
@@ -77,8 +87,9 @@ final class AppState {
 
         async let scannedServers = scanServers()
         async let scannedSims = SimulatorMonitor.scan()
+        async let scannedColima = ColimaMonitor.scan()
 
-        let (newServers, newSims) = await (scannedServers, scannedSims)
+        let (newServers, newSims, newColima) = await (scannedServers, scannedSims, scannedColima)
 
         let activePIDs = Set(newServers.map(\.pid))
         killedPIDs = killedPIDs.intersection(activePIDs)
@@ -100,6 +111,25 @@ final class AppState {
         if simulators != filteredSims {
             simulators = filteredSims
         }
+
+        if !colimaVMBusy {
+            if let newColima {
+                let activeContainerIDs = Set(newColima.containers.map(\.id))
+                killedContainerIDs = killedContainerIDs.intersection(activeContainerIDs)
+
+                let filteredContainers = newColima.containers.filter { !killedContainerIDs.contains($0.id) }
+                clearStaleContainerFailures(among: filteredContainers)
+                let mergedContainers = preservingRestartingContainers(filteredContainers)
+
+                let mergedColima = ColimaMonitor.ColimaState(vm: newColima.vm, containers: mergedContainers)
+                if colima != mergedColima {
+                    colima = mergedColima
+                }
+            } else if colima != nil {
+                colima = nil
+            }
+        }
+
         if isInitialLoad {
             isInitialLoad = false
         }
@@ -125,6 +155,7 @@ final class AppState {
     private var hasRestartInFlight: Bool {
         restartStates.values.contains(.restarting)
             || simulatorRestartStates.values.contains(.restarting)
+            || containerRestartStates.values.contains(.restarting)
     }
 
     private func clearStaleFailures(among scanned: [DevServer]) {
@@ -145,6 +176,26 @@ final class AppState {
             }
         }
         return merged.sorted { $0.port < $1.port }
+    }
+
+    private func clearStaleContainerFailures(among scanned: [DockerContainer]) {
+        for container in scanned {
+            if case .failed = containerRestartStates[container.id] {
+                containerRestartStates[container.id] = nil
+            }
+        }
+    }
+
+    private func preservingRestartingContainers(_ scanned: [DockerContainer]) -> [DockerContainer] {
+        guard !containerRestartStates.isEmpty else { return scanned }
+
+        var merged = scanned
+        for (id, _) in containerRestartStates where !merged.contains(where: { $0.id == id }) {
+            if let previous = colima?.containers.first(where: { $0.id == id }) {
+                merged.append(previous)
+            }
+        }
+        return merged.sorted { $0.name < $1.name }
     }
 
     // MARK: - Actions
@@ -186,11 +237,9 @@ final class AppState {
     }
 
     private func finishSimulatorRestart(udid: String, failure: String?) {
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.25)) {
-                self.simulatorRestartStates[udid] = failure.map { .failed($0) }
-                if failure != nil { self.lastEvent = .failed }
-            }
+        withAnimation(.easeOut(duration: 0.25)) {
+            simulatorRestartStates[udid] = failure.map { .failed($0) }
+            if failure != nil { lastEvent = .failed }
         }
     }
 
@@ -266,6 +315,108 @@ final class AppState {
     func openInBrowser(_ server: DevServer) {
         guard let url = server.localhostURL else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    // MARK: - Containers
+
+    func openInBrowser(_ container: DockerContainer) {
+        guard let port = container.primaryPort,
+              let url = URL(string: "http://localhost:\(port)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    func restartContainer(_ container: DockerContainer) {
+        guard containerRestartStates[container.id] != .restarting else { return }
+
+        lastEvent = .restarting
+        withAnimation(.easeOut(duration: 0.2)) {
+            containerRestartStates[container.id] = .restarting
+        }
+
+        Task {
+            let failure = await ColimaMonitor.restartContainer(id: container.id)
+            finishContainerRestart(id: container.id, failure: failure)
+        }
+    }
+
+    private func finishContainerRestart(id: String, failure: String?) {
+        withAnimation(.easeOut(duration: 0.25)) {
+            containerRestartStates[id] = failure.map { .failed($0) }
+            if failure != nil { lastEvent = .failed }
+        }
+    }
+
+    func dismissContainerFailure(_ container: DockerContainer) {
+        withAnimation(.easeOut(duration: 0.25)) {
+            containerRestartStates[container.id] = nil
+            colima?.containers.removeAll { $0.id == container.id }
+        }
+    }
+
+    func stopContainer(_ container: DockerContainer) {
+        guard containerRestartStates[container.id] != .restarting else { return }
+
+        lastEvent = .killed
+        withAnimation(.easeOut(duration: 0.2)) {
+            containerRestartStates[container.id] = .restarting
+        }
+
+        Task {
+            let failure = await ColimaMonitor.stopContainer(id: container.id)
+            finishStopContainer(container.id, failure: failure)
+        }
+    }
+
+    private func finishStopContainer(_ id: String, failure: String?) {
+        withAnimation(.easeOut(duration: 0.25)) {
+            if let failure {
+                containerRestartStates[id] = .failed(failure)
+                lastEvent = .failed
+            } else {
+                containerRestartStates[id] = nil
+                killedContainerIDs.insert(id)
+                colima?.containers.removeAll { $0.id == id }
+            }
+        }
+    }
+
+    func startColimaVM() {
+        guard !colimaVMBusy else { return }
+        colimaVMBusy = true
+        lastEvent = .restarting
+
+        Task {
+            let failure = await ColimaMonitor.startVM()
+            finishColimaVMAction(failure: failure)
+        }
+    }
+
+    func stopColimaVM() {
+        guard !colimaVMBusy else { return }
+        colimaVMBusy = true
+        lastEvent = .restarting
+
+        Task {
+            let failure = await ColimaMonitor.stopVM()
+            finishColimaVMAction(failure: failure)
+        }
+    }
+
+    func dismissColimaVMFailure() {
+        withAnimation(.easeOut(duration: 0.25)) {
+            colimaVMFailure = nil
+        }
+    }
+
+    private func finishColimaVMAction(failure: String?) {
+        colimaVMBusy = false
+        if let failure {
+            colimaVMFailure = failure
+            lastEvent = .failed
+        } else {
+            colimaVMFailure = nil
+        }
+        Task { await refresh() }
     }
 
     // MARK: - Restart
@@ -352,14 +503,12 @@ final class AppState {
     }
 
     private func finishRestart(port: Int, failure: String?) {
-        DispatchQueue.main.async {
-            withAnimation(.easeOut(duration: 0.25)) {
-                if let failure {
-                    self.restartStates[port] = .failed(failure)
-                    self.lastEvent = .failed
-                } else {
-                    self.restartStates[port] = nil
-                }
+        withAnimation(.easeOut(duration: 0.25)) {
+            if let failure {
+                restartStates[port] = .failed(failure)
+                lastEvent = .failed
+            } else {
+                restartStates[port] = nil
             }
         }
     }

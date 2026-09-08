@@ -12,4 +12,5 @@ extension Color {
     static let panelGround = Color(hex: 0x17171D)
     static let xcode = Color(hex: 0x338FF0)
     static let alert = Color(hex: 0xFA5773)
+    static let docker = Color(hex: 0x2496ED)
 }

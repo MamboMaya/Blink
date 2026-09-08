@@ -11,7 +11,10 @@ extension AppState {
         let ports = await PortScanner.scan()
 
         let devPorts = ports.filter { port in
-            Self.devCommands.contains(port.command.lowercased())
+            let command = port.command.lowercased()
+            // lsof reports versioned interpreters like "python3.12".
+            let unversioned = command.trimmingCharacters(in: CharacterSet(charactersIn: "0123456789."))
+            return Self.devCommands.contains(command) || Self.devCommands.contains(unversioned)
         }
 
         var seenPorts = Set<Int>()
