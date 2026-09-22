@@ -156,8 +156,18 @@ private extension MenuBarView {
 
             colimaVMRow
 
-            if let colima = appState.colima {
-                ForEach(colima.containers) { container in
+            if appState.colima != nil {
+                let layout = appState.containerLayout
+
+                ForEach(layout.groups) { group in
+                    ContainerGroupView(group: group)
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .top).combined(with: .opacity),
+                            removal: .move(edge: .trailing).combined(with: .opacity)
+                        ))
+                }
+
+                ForEach(layout.ungrouped) { container in
                     ContainerRowView(container: container)
                         .transition(.asymmetric(
                             insertion: .move(edge: .top).combined(with: .opacity),

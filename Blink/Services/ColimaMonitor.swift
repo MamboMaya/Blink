@@ -107,13 +107,32 @@ private extension ColimaMonitor {
         let names: String
         let image: String
         let ports: String
+        let labels: String?
 
         enum CodingKeys: String, CodingKey {
             case id = "ID"
             case names = "Names"
             case image = "Image"
             case ports = "Ports"
+            case labels = "Labels"
         }
+    }
+
+    static let composeProjectLabel = "com.docker.compose.project"
+
+    // `docker ps` flattens labels to "k=v,k=v". Values can't contain commas
+    // in practice for the project label (Compose normalises it to
+    // [a-z0-9_-]), so a naive split is safe here.
+    static func parseComposeProject(_ labels: String?) -> String? {
+        guard let labels else { return nil }
+        for pair in labels.split(separator: ",") {
+            guard let equals = pair.firstIndex(of: "=") else { continue }
+            if pair[pair.startIndex..<equals] == composeProjectLabel {
+                let value = pair[pair.index(after: equals)...].trimmingCharacters(in: .whitespaces)
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
     }
 
     static func scanContainers() async -> [DockerContainer] {
@@ -144,6 +163,7 @@ private extension ColimaMonitor {
                 name: entry.names,
                 image: entry.image,
                 hostPorts: parsePorts(entry.ports),
+                project: parseComposeProject(entry.labels),
                 cpuPercent: stat?.cpuPercent,
                 memoryBytes: stat?.memoryBytes
             )

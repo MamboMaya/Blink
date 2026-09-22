@@ -5,6 +5,10 @@ struct DockerContainer: Identifiable, Equatable {
     let name: String
     let image: String
     let hostPorts: [Int]
+    // The Compose project this container belongs to, from the
+    // com.docker.compose.project label. Plain `docker run` containers
+    // have none and stay ungrouped.
+    let project: String?
     var cpuPercent: Double?
     var memoryBytes: Int64?
 
