@@ -19,6 +19,19 @@ final class AppState {
     var colimaVMBusy: Bool = false
     var colimaVMFailure: String?
 
+    private static let collapsedGroupsKey = "collapsedContainerGroups"
+    var collapsedContainerGroups: Set<String> = Set(
+        UserDefaults.standard.stringArray(forKey: collapsedGroupsKey) ?? []
+    ) {
+        didSet {
+            UserDefaults.standard.set(Array(collapsedContainerGroups).sorted(), forKey: Self.collapsedGroupsKey)
+        }
+    }
+
+    var containerLayout: ContainerGroup.Layout {
+        ContainerGroup.layout(colima?.containers ?? [])
+    }
+
     private static let pollingInterval: TimeInterval = 3.0
 
     // Only ever touched on the main actor except at teardown, where deinit
@@ -377,6 +390,22 @@ final class AppState {
                 killedContainerIDs.insert(id)
                 colima?.containers.removeAll { $0.id == id }
             }
+        }
+    }
+
+    func toggleContainerGroup(_ group: ContainerGroup) {
+        withAnimation(.snappy(duration: 0.2)) {
+            if collapsedContainerGroups.contains(group.name) {
+                collapsedContainerGroups.remove(group.name)
+            } else {
+                collapsedContainerGroups.insert(group.name)
+            }
+        }
+    }
+
+    func stopContainerGroup(_ group: ContainerGroup) {
+        for container in group.containers {
+            stopContainer(container)
         }
     }
 
